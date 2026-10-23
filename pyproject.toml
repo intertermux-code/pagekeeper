@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pagekeeper"
+version = "0.1.0"
+description = "On-call rotations, escalation policies and paging in one stdlib-only Python package backed by SQLite"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "AP", email = "intertermux@gmail.com" }]
+keywords = ["oncall", "escalation", "paging", "alerting", "sqlite", "stdlib"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: No Input/Output (Daemon)",
+  "Intended Audience :: Developers",
+  "Intended Audience :: System Administrators",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: System :: Monitoring",
+]
+
+[project.urls]
+Homepage = "https://github.com/intertermux-code/pagekeeper"
+Issues = "https://github.com/intertermux-code/pagekeeper/issues"
+Changelog = "https://github.com/intertermux-code/pagekeeper/releases"
+
+[project.scripts]
+pagekeeper = "pagekeeper.cli:main"
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
