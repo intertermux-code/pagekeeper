@@ -1,0 +1,15 @@
+include LICENSE
+include README.md
+recursive-include src *.py
+prune tests
+recursive-exclude src/pagekeeper.egg-info *
+prune src/pagekeeper.egg-info
+recursive-exclude *.egg-info *
+prune *.egg-info
+prune .pytest_cache
+global-exclude *.egg-info
+global-exclude *.py[cod]
+global-exclude __pycache__
+global-exclude .DS_Store
+exclude setup.cfg
+global-exclude setup.cfg

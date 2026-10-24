@@ -4,11 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pagekeeper"
-version = "0.1.0"
+version = "0.2.0"
 description = "On-call rotations, escalation policies and paging in one stdlib-only Python package backed by SQLite"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "AP", email = "intertermux@gmail.com" }]
 keywords = ["oncall", "escalation", "paging", "alerting", "sqlite", "stdlib"]
 classifiers = [
@@ -16,7 +17,6 @@ classifiers = [
   "Environment :: No Input/Output (Daemon)",
   "Intended Audience :: Developers",
   "Intended Audience :: System Administrators",
-  "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",

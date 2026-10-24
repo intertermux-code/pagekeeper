@@ -1,5 +1,10 @@
 # pagekeeper
 
+[![PyPI](https://img.shields.io/pypi/v/pagekeeper)](https://pypi.org/project/pagekeeper/)
+[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/pagekeeper)](https://pypi.org/project/pagekeeper/)
+[![CI](https://github.com/intertermux-code/pagekeeper/actions/workflows/test.yml/badge.svg)](https://github.com/intertermux-code/pagekeeper/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Lightweight on-call scheduling, escalation and paging — the parts small teams
 actually use, in one Python package backed by SQLite.
 
@@ -21,7 +26,7 @@ single-process answer: one command, one file, done.
 ## Quickstart
 
 ```bash
-pip install -e .            # from a checkout; or: pipx install git+https://github.com/intertermux-code/pagekeeper
+pip install pagekeeper
 mkdir -p ~/oncall && cd ~/oncall
 export PAGEKEEPER_DB=~/oncall/pagekeeper.db
 ```
@@ -255,7 +260,27 @@ python -m pytest -q
 
 The suite drives the escalation engine, the server and the CLI with an
 injectable clock, a recording HTTP opener and a loopback HTTP sink that stands
-in for Slack and Discord, so no test touches the network.
+in for Slack and Discord, so no test touches the network. The full suite is **111 tests**.
+
+## Releasing
+
+Releases are tag-driven and published with [PyPI Trusted
+Publishing](https://docs.pypi.org/trusted-publishers/) (OIDC) — no secrets,
+tokens or credentials live in the repository.
+
+1. Bump `version` in `pyproject.toml` and the matching `__version__` in
+   `src/pagekeeper/__init__.py`, then commit.
+2. Tag the commit: `git tag v0.x.y && git push origin v0.x.y`.
+3. The `Publish` workflow runs on every `v*` tag: it checks that the tag and
+   `pyproject.toml` agree, builds the sdist and wheel, runs `twine check`,
+   and uploads the artifacts.
+4. The `publish` job (needs `build`, runs in the `publish` environment) uploads
+   to PyPI using the trusted-publisher OIDC token.
+
+**One-time setup for the first real publish:** the repo owner must register
+pagekeeper as a trusted publisher on PyPI (Project → Settings → Trusted
+Publishers) and create the `publish` GitHub environment. Until that is done,
+tags will build but nothing is uploaded.
 
 ## License
 
