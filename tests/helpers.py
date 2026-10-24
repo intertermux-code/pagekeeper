@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from pagekeeper.schedules import Schedule, ScheduleStore
 from pagekeeper.users import UserStore
@@ -85,3 +88,51 @@ class RecordingOpener:
     @property
     def bodies(self) -> list[bytes]:
         return [request.data or b"" for request in self.requests]
+
+
+class Sink:
+    """A local HTTP endpoint that records what was POSTed to it.
+
+    Stands in for Slack, Discord or anything else on the other side of a real
+    `urlopen`, so payload shapes can be checked over the wire without leaving
+    the test process.
+    """
+
+    def __init__(self, status: int = 200) -> None:
+        self.requests: list[tuple[str, dict, bytes]] = []
+        recorded = self.requests
+        reply = bytes(str(status), "ascii")
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                recorded.append((self.path, dict(self.headers), self.rfile.read(length)))
+                self.send_response(status)
+                self.send_header("Content-Length", str(len(reply)))
+                self.end_headers()
+                self.wfile.write(reply)
+
+            def log_message(self, *args):
+                pass  # the suite is quieter without a line per request
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self._thread = threading.Thread(
+            target=self._server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
+        )
+        self._thread.start()
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self._server.server_address[1]}"
+
+    @property
+    def payloads(self) -> list[dict]:
+        """Every recorded body parsed as JSON, so only for JSON-only sinks."""
+        return [json.loads(body) for _path, _headers, body in self.requests]
+
+    def close(self) -> None:
+        self._server.shutdown()
+        self._thread.join(timeout=5)
+        self._server.server_close()

@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional
 
-TARGET_KINDS = ("user", "schedule", "ntfy", "webhook")
-CHANNELS = ("ntfy", "webhook")
+TARGET_KINDS = ("user", "schedule", "ntfy", "webhook", "slack", "discord")
+CHANNELS = ("ntfy", "webhook", "slack", "discord")
 
 
 @dataclass(frozen=True)

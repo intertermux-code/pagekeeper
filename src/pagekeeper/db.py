@@ -12,7 +12,23 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-SCHEMA = """
+from .models import TARGET_KINDS
+
+#: The `kind` list is baked into a CHECK constraint, so it has to be written
+#: from one source of truth: databases created before a channel existed are
+#: rebuilt on first open (see _upgrade_target_kinds).
+_TARGET_KINDS_SQL = ", ".join(f"'{kind}'" for kind in TARGET_KINDS)
+
+_STEP_TARGETS = f"""
+CREATE TABLE IF NOT EXISTS step_targets (
+    id      INTEGER PRIMARY KEY,
+    step_id INTEGER NOT NULL REFERENCES policy_steps(id) ON DELETE CASCADE,
+    kind    TEXT    NOT NULL CHECK (kind IN ({_TARGET_KINDS_SQL})),
+    value   TEXT    NOT NULL
+);
+"""
+
+SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS users (
     id          INTEGER PRIMARY KEY,
     name        TEXT    NOT NULL UNIQUE,
@@ -59,12 +75,7 @@ CREATE TABLE IF NOT EXISTS policy_steps (
     UNIQUE (policy_id, position)
 );
 
-CREATE TABLE IF NOT EXISTS step_targets (
-    id      INTEGER PRIMARY KEY,
-    step_id INTEGER NOT NULL REFERENCES policy_steps(id) ON DELETE CASCADE,
-    kind    TEXT    NOT NULL CHECK (kind IN ('user', 'schedule', 'ntfy', 'webhook')),
-    value   TEXT    NOT NULL
-);
+{_STEP_TARGETS}
 
 CREATE TABLE IF NOT EXISTS alerts (
     id          INTEGER PRIMARY KEY,
@@ -95,6 +106,38 @@ CREATE TABLE IF NOT EXISTS pages (
 """
 
 
+def _upgrade_target_kinds(conn: sqlite3.Connection) -> None:
+    """Widen `step_targets.kind` on a database created before a channel existed.
+
+    SQLite cannot change a CHECK constraint in place.  Nothing references
+    step_targets, so the rows survive a rebuild inside one transaction; without
+    this an old file would reject `slack:` targets with a raw constraint error.
+    """
+    stored = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'step_targets'"
+    ).fetchone()
+    if stored is None or _TARGET_KINDS_SQL in (stored["sql"] or ""):
+        return
+
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute(
+            "CREATE TABLE step_targets_upgrade AS"
+            " SELECT id, step_id, kind, value FROM step_targets"
+        )
+        conn.execute("DROP TABLE step_targets")
+        conn.execute(_STEP_TARGETS)
+        conn.execute(
+            "INSERT INTO step_targets (id, step_id, kind, value)"
+            " SELECT id, step_id, kind, value FROM step_targets_upgrade"
+        )
+        conn.execute("DROP TABLE step_targets_upgrade")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+
 class Database:
     """A file-backed SQLite database with lazily created schema."""
 
@@ -111,6 +154,8 @@ class Database:
             conn = self._open()
             try:
                 conn.executescript(SCHEMA)
+                conn.commit()
+                _upgrade_target_kinds(conn)
                 conn.commit()
             finally:
                 conn.close()

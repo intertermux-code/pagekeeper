@@ -4,10 +4,10 @@ Lightweight on-call scheduling, escalation and paging — the parts small teams
 actually use, in one Python package backed by SQLite.
 
 `pagekeeper` knows who is on call, takes alerts over a webhook, pages the
-right person on ntfy or any HTTP endpoint, escalates to the next step when
-nobody acknowledges in time, and stops when somebody does. It is a single
-process with no database server, no message broker and no third-party
-dependencies: Python 3.11+ standard library only.
+right person on ntfy, Slack, Discord or any HTTP endpoint, escalates to the
+next step when nobody acknowledges in time, and stops when somebody does. It
+is a single process with no database server, no message broker and no
+third-party dependencies: Python 3.11+ standard library only.
 
 ## Why this exists
 
@@ -95,7 +95,7 @@ fresh escalation. `GET /healthz` answers `ok` for liveness probes.
 
 ## Notifiers
 
-Two channels, both stdlib HTTP. No phone calls, no SMS.
+Four channels, all stdlib HTTP. No phone calls, no SMS.
 
 - **ntfy** — `--ntfy-topic oncall-team`, `https://ntfy.sh/oncall-team` or your
   own server URL. Priority rises with each escalation step (3 → 4 → 5) and the
@@ -104,9 +104,46 @@ Two channels, both stdlib HTTP. No phone calls, no SMS.
 - **generic webhook** — a JSON `POST` with `text`, `title` and structured fields
   (`alert_id`, `fingerprint`, `policy`, `step`, `state`). Slack incoming
   webhooks read `text`, so Slack works without a dedicated integration.
+- **Slack** — `slack:<webhook URL>`. A Block Kit message: header, alert detail,
+  the alert fields and an **Acknowledge** button. The button is what turns
+  Slack into a way to stop an escalation, and it needs an app — see below.
+- **Discord** — `discord:<webhook URL>`. An embed with title, description and
+  the same alert fields. One-way: a Discord channel webhook cannot carry a
+  button that calls back into pagekeeper, so ack those from the CLI.
 
 Every attempt is recorded in the `pages` table, successes and failures alike,
 and failures are logged to stderr — a broken webhook never stops the clock.
+
+### Acknowledging from Slack
+
+Clicks are delivered to a Slack app's Interactivity Request URL, never to the
+webhook that posted the message, so the outgoing webhook and the incoming click
+have to belong to the same app. **A bare incoming webhook alone can page you
+but cannot take an ack.**
+
+1. Create an app in your workspace (api.slack.com → *Your Apps*).
+2. *Incoming Webhooks* → add one to a channel, copy its URL, and use it as a
+   target:
+   `pagekeeper policy step add ops --delay 15 --target slack:https://hooks.slack.com/services/T00/B00/XXXX`.
+3. *Interactivity & Shortcuts* → on, with **Request URL** set to
+   `https://pager.example.net/slack/actions`. Save it, then check it works by
+   firing a test alert and pressing **Acknowledge**.
+4. *Basic Information → App Credentials* → copy the **Signing Secret** and give
+   it to the server: `serve --slack-signing-secret`, or
+   `PAGEKEEPER_SLACK_SIGNING_SECRET` in the service environment. Without it
+   `/slack/actions` rejects every request rather than trusting an unsigned one.
+5. Slack only talks HTTPS, so run `serve` behind a TLS-terminating proxy.
+
+A click whose HMAC-SHA256 signature matches the secret, and whose timestamp is
+within five minutes, acknowledges the alert through exactly the same path as
+`pagekeeper ack <id>`: escalation stops and the endpoint answers
+`{"ok": true, "alert_id": 7, "state": "acked"}`. Everything else is refused and
+changes nothing — missing, stale or bad signature → 401; a body pagekeeper
+cannot read, or one with no `ack` action → 400; an unknown alert → 404. `/hook`,
+`/webhook`, `/healthz` and the status page behave as before.
+
+Acks are not attributed: the escalation stops, but pagekeeper does not record
+who pressed the button.
 
 ## Configuration
 
@@ -121,6 +158,7 @@ secret is ever baked in.
 | tick interval (s) | `serve --tick` / `PAGEKEEPER_TICK` | `15` |
 | default policy | `serve --policy` / `PAGEKEEPER_POLICY` | none |
 | ntfy base URL | `serve --ntfy-base` / `PAGEKEEPER_NTFY_BASE` | `https://ntfy.sh` |
+| Slack signing secret | `serve --slack-signing-secret` / `PAGEKEEPER_SLACK_SIGNING_SECRET` | none: `/slack/actions` accepts nothing |
 
 Times are ISO-8601; a timestamp without an offset is read as UTC.
 
@@ -174,11 +212,12 @@ WantedBy=multi-user.target
 | `policy step add NAME --delay MIN --target KIND:VALUE` | append an escalation step (repeat `--target`) |
 | `oncall [--schedule NAME]` | who is holding the pager right now |
 | `ack ALERT_ID` | acknowledge and stop escalation |
-| `serve [--host H] [--port P] [--tick S] [--policy NAME]` | webhook ingress, status page and ticker |
+| `serve [--host H] [--port P] [--tick S] [--policy NAME] [--slack-signing-secret S]` | webhook ingress, status page, Slack acks and ticker |
 
-Targets are `user:NAME`, `schedule:NAME`, `ntfy:TOPIC` or `webhook:URL`. `user`
-and `schedule` targets are stored by id, so paging keeps working after a rename
-of the row you referenced.
+Targets are `user:NAME`, `schedule:NAME`, `ntfy:TOPIC`, `webhook:URL`,
+`slack:URL` or `discord:URL`. The value is split on the first colon only, so a
+URL keeps its own `https://`. `user` and `schedule` targets are stored by id, so
+paging keeps working after a rename of the row you referenced.
 
 ## Scope and limitations
 
@@ -191,14 +230,18 @@ Read this before adopting it; it is deliberately small.
 - **SQLite.** Great for one node and small teams; there is no replication, and
   writes are per-transaction, so a very high alert fan-out will bottleneck.
 - **Not an incident platform.** No timelines, no postmortems, no on-call
-  calendar UI, no chat bots, no scheduling of meetings, no mobile app. There is
-  one status page and it is server-rendered HTML.
+  calendar UI, no chat bot beyond the Slack Ack button, no scheduling of
+  meetings, no mobile app. There is one status page and it is server-rendered
+  HTML.
 - **No authentication on the ingress endpoint.** `/hook` accepts JSON from
   whoever can reach it. Put it behind TLS and a reverse proxy with source
   limits or a shared secret path, and keep `GET /` behind basic auth if the
-  alert titles are sensitive.
-- **Ack is by CLI.** Acknowledging from a notification would need a signing
-  scheme and a per-recipient link; v1 stops at `pagekeeper ack <id>`.
+  alert titles are sensitive. `/slack/actions` is the one endpoint that
+  authenticates, and only as far as Slack is concerned.
+- **Ack is a CLI command or a Slack button.** The Slack button needs a proper
+  app with a signing secret, reachable over HTTPS, as above. There is no
+  per-recipient ack link, ntfy and Discord messages cannot call back, and
+  nothing records who acknowledged.
 - **No users' email reminders, no notifications of schedule changes**, no
   multi-timezone working-hours rotations beyond a UTC start time.
 
@@ -211,7 +254,8 @@ python -m pytest -q
 ```
 
 The suite drives the escalation engine, the server and the CLI with an
-injectable clock and a recording HTTP opener, so no test touches the network.
+injectable clock, a recording HTTP opener and a loopback HTTP sink that stands
+in for Slack and Discord, so no test touches the network.
 
 ## License
 

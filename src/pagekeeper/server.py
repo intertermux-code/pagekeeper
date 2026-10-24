@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import html
 import json
 import logging
@@ -16,15 +18,66 @@ from .alerts import extract_fingerprint
 from .clock import current, format_time
 from .db import Database
 from .engine import EscalationEngine
-from .errors import PagekeeperError
+from .errors import NotFound, PagekeeperError
 from .ingest import ingest
 from .models import Alert
+from .notifiers import ACK_ACTION_ID
 from .schedules import OnCall
 
 log = logging.getLogger("pagekeeper")
 
 MAX_BODY_BYTES = 256 * 1024
 REFRESH_SECONDS = 30
+
+#: Slack's own replay window for signed requests, in seconds.
+SLACK_FRESHNESS_SECONDS = 300
+SLACK_SIGNATURE_VERSION = "v0"
+SLACK_TIMESTAMP_HEADER = "X-Slack-Request-Timestamp"
+SLACK_SIGNATURE_HEADER = "X-Slack-Signature"
+
+
+class SlackRequestError(PagekeeperError):
+    """An interactive request we will not act on, carrying its HTTP status."""
+
+    def __init__(self, status: int, message: str) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+def slack_signature(secret: str, timestamp: str, body: bytes) -> str:
+    """Slack signs "v0:<timestamp>:<raw body>" with the app's signing secret."""
+    base = f"{SLACK_SIGNATURE_VERSION}:{timestamp}:".encode("utf-8") + body
+    digest = hmac.new(secret.encode("utf-8"), base, hashlib.sha256).hexdigest()
+    return f"{SLACK_SIGNATURE_VERSION}={digest}"
+
+
+def require_signed_slack(
+    secret: Optional[str],
+    headers: Mapping[str, str],
+    body: bytes,
+    *,
+    now: int,
+) -> None:
+    """Refuse anything Slack did not sign, with our secret, moments ago."""
+    if not secret:
+        # An unsigned button click would let anyone ack anyone else's alerts.
+        raise SlackRequestError(
+            401,
+            "interactive acks need a signing secret: run serve with "
+            "--slack-signing-secret",
+        )
+    timestamp = headers.get(SLACK_TIMESTAMP_HEADER, "")
+    try:
+        sent_at = int(timestamp)
+    except ValueError:
+        raise SlackRequestError(401, "missing or malformed request timestamp") from None
+    if abs(now - sent_at) > SLACK_FRESHNESS_SECONDS:
+        raise SlackRequestError(401, "request timestamp is outside the replay window")
+    signature = headers.get(SLACK_SIGNATURE_HEADER, "")
+    expected = slack_signature(secret, timestamp, body)
+    # Bytes, because a header we did not write can hold anything.
+    if not hmac.compare_digest(signature.encode("utf-8"), expected.encode("utf-8")):
+        raise SlackRequestError(401, "signature does not match this request")
 
 
 @dataclass(frozen=True)
@@ -56,10 +109,12 @@ class App:
         engine: EscalationEngine,
         *,
         default_policy: Optional[str] = None,
+        slack_signing_secret: Optional[str] = None,
     ) -> None:
         self.db = db
         self.engine = engine
         self.default_policy = default_policy
+        self.slack_signing_secret = slack_signing_secret or None
 
     def handle_webhook(
         self, payload: Mapping[str, Any], policy: Optional[str] = None
@@ -81,6 +136,11 @@ class App:
             "deduplicated": result.deduplicated,
             "resolved": result.resolved,
         }
+
+    def ack_alert(self, alert_id: int) -> dict:
+        """Acknowledge through the engine, exactly as `pagekeeper ack` does."""
+        alert = self.engine.ack(alert_id)
+        return {"ok": True, "alert_id": alert.id, "state": alert.state}
 
     def on_call_rows(self, now: int) -> list[OnCallRow]:
         rows: list[OnCallRow] = []
@@ -138,6 +198,39 @@ def _escalates(alert: Alert, now: int) -> str:
 def _query_policy(path: str) -> Optional[str]:
     values = parse_qs(urlparse(path).query).get("policy")
     return values[0] if values else None
+
+
+def _slack_payload(body: bytes) -> Mapping[str, Any]:
+    """Slack posts interactions as form data, with the JSON in `payload`."""
+    try:
+        form = parse_qs(body.decode("utf-8"))
+    except UnicodeDecodeError as exc:
+        raise SlackRequestError(400, f"body is not valid UTF-8: {exc}") from exc
+    raw = form.get("payload", [""])[0]
+    if not raw:
+        raise SlackRequestError(400, "expected a `payload` form field")
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise SlackRequestError(400, f"payload is not valid JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise SlackRequestError(400, "expected a JSON object in `payload`")
+    return payload
+
+
+def _slack_alert_id(payload: Mapping[str, Any]) -> int:
+    """The alert behind an Ack click; any other interaction is not ours to serve."""
+    if payload.get("type") != "block_actions":
+        raise SlackRequestError(400, "expected a block_actions payload")
+    for action in payload.get("actions") or ():
+        if isinstance(action, Mapping) and action.get("action_id") == ACK_ACTION_ID:
+            try:
+                return int(action["value"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise SlackRequestError(
+                    400, "ack action carries no usable alert id"
+                ) from exc
+    raise SlackRequestError(400, f"no {ACK_ACTION_ID!r} action in this payload")
 
 
 def _cells(*values: Any) -> str:
@@ -242,6 +335,9 @@ class IngressHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = self._path()
+        if path == "/slack/actions":
+            self._slack_actions()
+            return
         if path not in ("/hook", "/webhook"):
             self._error(404, "use POST /hook")
             return
@@ -269,10 +365,47 @@ class IngressHandler(BaseHTTPRequestHandler):
             "application/json",
         )
 
+    def _slack_actions(self) -> None:
+        """Ack an alert from a Block Kit button, if Slack really sent the click."""
+        app = self.server.app
+        try:
+            body = self._read_body()
+            require_signed_slack(
+                app.slack_signing_secret,
+                self.headers,
+                body,
+                now=current(app.engine.clock),
+            )
+            payload = _slack_payload(body)
+            result = app.ack_alert(_slack_alert_id(payload))
+        except SlackRequestError as exc:
+            log.warning("rejected Slack interaction: %s", exc)
+            self._error(exc.status, str(exc))
+            return
+        except NotFound as exc:
+            self._error(404, str(exc))
+            return
+        except ValueError as exc:
+            self._error(400, str(exc))
+            return
+        except PagekeeperError as exc:
+            self._error(400, str(exc))
+            return
+        except Exception:
+            log.exception("Slack action handling failed")
+            self._error(500, "internal error")
+            return
+
+        self._respond(
+            200,
+            json.dumps(result, sort_keys=True).encode("utf-8") + b"\n",
+            "application/json",
+        )
+
     def _path(self) -> str:
         return self.path.split("?", 1)[0].rstrip("/") or "/"
 
-    def _read_json(self) -> Mapping[str, Any]:
+    def _read_body(self) -> bytes:
         raw_length = self.headers.get("Content-Length")
         if raw_length is None:
             raise ValueError("Content-Length is required")
@@ -282,7 +415,10 @@ class IngressHandler(BaseHTTPRequestHandler):
             raise ValueError("Content-Length must be a number") from exc
         if length < 0 or length > MAX_BODY_BYTES:
             raise ValueError(f"body must be between 0 and {MAX_BODY_BYTES} bytes")
-        body = self.rfile.read(length)
+        return self.rfile.read(length)
+
+    def _read_json(self) -> Mapping[str, Any]:
+        body = self._read_body()
         try:
             payload = json.loads(body or b"{}")
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -339,10 +475,16 @@ def serve(
     port: int = 8080,
     tick_seconds: float = 15.0,
     default_policy: Optional[str] = None,
+    slack_signing_secret: Optional[str] = None,
     engine: Optional[EscalationEngine] = None,
 ) -> None:
     engine = engine if engine is not None else EscalationEngine(db)
-    app = App(db, engine, default_policy=default_policy)
+    app = App(
+        db,
+        engine,
+        default_policy=default_policy,
+        slack_signing_secret=slack_signing_secret,
+    )
     httpd = PagekeeperServer((host, port), app)
     ticker = Ticker(engine, tick_seconds)
     ticker.start()

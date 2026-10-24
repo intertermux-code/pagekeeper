@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from helpers import FakeClock, RecordingOpener
+from helpers import FakeClock, RecordingOpener, Sink
 from pagekeeper.db import Database
 from pagekeeper.engine import EscalationEngine
 from pagekeeper.notifiers import Notifier
@@ -12,6 +12,16 @@ from pagekeeper.policies import PolicyStore
 @pytest.fixture
 def db(tmp_path) -> Database:
     return Database(tmp_path / "pagekeeper.db")
+
+
+@pytest.fixture
+def sink():
+    """A loopback HTTP endpoint, so outbound paging never leaves the process."""
+    server = Sink()
+    try:
+        yield server
+    finally:
+        server.close()
 
 
 @pytest.fixture

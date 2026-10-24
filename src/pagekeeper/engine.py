@@ -14,7 +14,7 @@ from typing import Optional
 from .alerts import AlertStore
 from .clock import Clock, current, format_time
 from .db import Database
-from .models import Alert, PageMessage, Recipient, Step, User
+from .models import Alert, CHANNELS, PageMessage, Recipient, Step, User
 from .notifiers import DEFAULT_NTFY_BASE, Notifier
 from .policies import PolicyStore
 from .schedules import ScheduleStore
@@ -116,7 +116,7 @@ class EscalationEngine:
                         self._append_channels(
                             found, user, f"{on_call.schedule.name}: {user.name}"
                         )
-                elif target.kind in ("ntfy", "webhook"):
+                elif target.kind in CHANNELS:
                     found.append(
                         Recipient(target.kind, target.value, label)  # type: ignore[arg-type]
                     )

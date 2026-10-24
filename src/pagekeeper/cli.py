@@ -197,6 +197,7 @@ def cmd_serve(args: argparse.Namespace, db: Database) -> int:
         port=args.port,
         tick_seconds=args.tick,
         default_policy=args.policy,
+        slack_signing_secret=args.slack_signing_secret,
         engine=engine,
     )
     return 0
@@ -282,7 +283,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         required=True,
         metavar="KIND:VALUE",
-        help="user:NAME, schedule:NAME, ntfy:TOPIC or webhook:URL (repeatable)",
+        help="repeatable; kind is one of " + ", ".join(TARGET_KINDS)
+        + ", e.g. schedule:eu or slack:https://hooks.slack.com/services/T00/B00/XXXX",
     )
     policy_add.set_defaults(handler=cmd_policy_add)
 
@@ -324,6 +326,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--ntfy-base",
         default=_env("PAGEKEEPER_NTFY_BASE", DEFAULT_NTFY_BASE),
         help="base URL for bare ntfy topics",
+    )
+    serve_cmd.add_argument(
+        "--slack-signing-secret",
+        default=os.environ.get("PAGEKEEPER_SLACK_SIGNING_SECRET") or None,
+        help="signing secret of the Slack app that owns the Ack buttons "
+        "(env PAGEKEEPER_SLACK_SIGNING_SECRET); without it POST "
+        "/slack/actions rejects everything",
     )
     serve_cmd.set_defaults(handler=cmd_serve)
 

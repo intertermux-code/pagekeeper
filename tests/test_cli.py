@@ -173,3 +173,40 @@ def test_bad_target_value_for_an_unknown_user(database, capsys):
         database, "policy", "add", "ops", "--delay", "5", "--target", "user:nobody"
     ) == 1
     assert "no such user" in capsys.readouterr().err
+
+
+def test_chat_targets_keep_their_urls(database, capsys):
+    """The value is split on the first colon only, so https:// survives."""
+    assert run(
+        database, "policy", "add", "ops", "--delay", "5",
+        "--target", "slack:https://hooks.slack.test/services/T00/B00/XXXX",
+    ) == 0
+    assert run(
+        database, "policy", "step", "add", "ops", "--delay", "10",
+        "--target", "discord:https://discord.test/api/webhooks/123/token",
+    ) == 0
+    capsys.readouterr()
+
+    policies = PolicyStore(database)
+    steps = policies.steps(policies.get("ops").id)
+    assert [(step.targets[0].kind, step.targets[0].value) for step in steps] == [
+        ("slack", "https://hooks.slack.test/services/T00/B00/XXXX"),
+        ("discord", "https://discord.test/api/webhooks/123/token"),
+    ]
+
+
+def test_serve_reads_the_slack_signing_secret_from_flag_or_env(monkeypatch):
+    monkeypatch.delenv("PAGEKEEPER_SLACK_SIGNING_SECRET", raising=False)
+    assert cli.build_parser().parse_args(["serve"]).slack_signing_secret is None
+
+    monkeypatch.setenv("PAGEKEEPER_SLACK_SIGNING_SECRET", "from-the-environment")
+    assert (
+        cli.build_parser().parse_args(["serve"]).slack_signing_secret
+        == "from-the-environment"
+    )
+    assert (
+        cli.build_parser().parse_args(
+            ["serve", "--slack-signing-secret", "from-the-flag"]
+        ).slack_signing_secret
+        == "from-the-flag"
+    )
