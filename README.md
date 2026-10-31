@@ -169,7 +169,9 @@ Times are ISO-8601; a timestamp without an offset is read as UTC.
 
 The database file holds your webhook URLs and ntfy topics, so keep it as
 sensitive as the endpoints it points at: `chmod 600 "$PAGEKEEPER_DB"`.
-Backups are a file copy, and so is the whole migration story.
+Backups are a file copy, and so is the whole migration story. A leading `~` is
+expanded by pagekeeper itself, so a quoted `--db '~/oncall/pagekeeper.db'`
+lands in your home directory just like the unquoted shell form.
 
 ### Escalation semantics
 
@@ -260,7 +262,7 @@ python -m pytest -q
 
 The suite drives the escalation engine, the server and the CLI with an
 injectable clock, a recording HTTP opener and a loopback HTTP sink that stands
-in for Slack and Discord, so no test touches the network. The full suite is **111 tests**.
+in for Slack and Discord, so no test touches the network. The full suite is **115 tests**.
 
 ## Releasing
 

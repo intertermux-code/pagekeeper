@@ -6,6 +6,7 @@ threads and the escalation ticker never share a cursor.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -142,12 +143,14 @@ class Database:
     """A file-backed SQLite database with lazily created schema."""
 
     def __init__(self, path: str | Path) -> None:
-        self.path = str(path)
+        # `~` is resolved once, here, so the directory we create and the file
+        # we connect to can never be two different paths again.
+        self.path = os.path.expanduser(str(path))
         self._lock = threading.Lock()
         self._ready = False
 
     def init(self) -> None:
-        parent = Path(self.path).expanduser().parent
+        parent = Path(self.path).parent
         if str(parent):
             parent.mkdir(parents=True, exist_ok=True)
         with self._lock:
