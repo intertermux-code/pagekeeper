@@ -262,7 +262,7 @@ python -m pytest -q
 
 The suite drives the escalation engine, the server and the CLI with an
 injectable clock, a recording HTTP opener and a loopback HTTP sink that stands
-in for Slack and Discord, so no test touches the network. The full suite is **115 tests**.
+in for Slack and Discord, so no test touches the network. The full suite is **119 tests**.
 
 ## Releasing
 

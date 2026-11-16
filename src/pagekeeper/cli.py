@@ -11,7 +11,7 @@ from . import __version__
 from .clock import format_time, parse_time
 from .db import Database
 from .engine import EscalationEngine
-from .errors import PagekeeperError, UsageError
+from .errors import DatabaseError, PagekeeperError, UsageError
 from .models import OnCall, TARGET_KINDS, Target
 from .notifiers import DEFAULT_NTFY_BASE
 from .policies import PolicyStore
@@ -345,6 +345,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         db = Database(args.db)
         db.init()
         return args.handler(args, db)
+    except DatabaseError as exc:
+        print(f"pagekeeper: cannot open database {exc}", file=sys.stderr)
+        return 2
     except PagekeeperError as exc:
         print(f"pagekeeper: error: {exc}", file=sys.stderr)
         return 1

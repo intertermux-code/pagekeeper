@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -210,3 +211,72 @@ def test_serve_reads_the_slack_signing_secret_from_flag_or_env(monkeypatch):
         ).slack_signing_secret
         == "from-the-flag"
     )
+
+
+def run_with_db(db_path, *argv):
+    """Invoke the CLI with an arbitrary database path; return its exit code."""
+    return cli.main(["--db", str(db_path), *argv])
+
+
+def assert_clean_db_error(code, err, db_path):
+    """A bad --db path must fail cleanly: exit 2, path named, no traceback."""
+    assert code == 2
+    assert "Traceback" not in err
+    assert "cannot open database" in err
+    assert str(db_path) in err
+
+
+def test_bad_db_uncreatable_parent_exits_cleanly(tmp_path, capsys, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_text("a regular file where a directory is needed")
+    db_path = blocker / "nested" / "pagekeeper.db"
+
+    code = run_with_db(db_path, "init")
+    err = capsys.readouterr().err
+
+    assert_clean_db_error(code, err, db_path)
+    # No database file materialised beside the cwd.
+    assert not (tmp_path / "pagekeeper.db").exists()
+
+
+def test_bad_db_path_is_a_directory_exits_cleanly(tmp_path, capsys):
+    assert run_with_db(tmp_path, "init") == 2
+
+    err = capsys.readouterr().err
+    assert_clean_db_error(2, err, tmp_path)
+    assert not (tmp_path / "pagekeeper.db").exists()
+
+
+def test_bad_db_unwritable_location_exits_cleanly(tmp_path, capsys):
+    if os.geteuid() == 0:
+        pytest.skip("root bypasses permission bits: a directory cannot be made unwritable")
+
+    readonly = tmp_path / "readonly"
+    readonly.mkdir()
+    readonly.chmod(0o555)
+    try:
+        code = run_with_db(readonly / "pagekeeper.db", "init")
+        err = capsys.readouterr().err
+        assert_clean_db_error(code, err, readonly / "pagekeeper.db")
+    finally:
+        readonly.chmod(0o755)
+
+    assert not (tmp_path / "pagekeeper.db").exists()
+
+
+def test_home_relative_db_still_works_after_the_fix(tmp_path, capsys, monkeypatch):
+    """Guard: the `~` expansion fix (2026-10-31) still behaves as before."""
+    home = tmp_path / "home"
+    home.mkdir()
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.chdir(workdir)
+
+    assert run_with_db("~/pagekeeper.db", "init") == 0
+    assert "database ready" in capsys.readouterr().out
+    assert (home / "pagekeeper.db").is_file()
+    # A literal `~` must never be created beside the cwd.
+    assert not (workdir / "~").exists()

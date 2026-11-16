@@ -11,3 +11,7 @@ class NotFound(PagekeeperError):
 
 class UsageError(PagekeeperError):
     """The operator asked for something pagekeeper cannot do; exit code 1."""
+
+
+class DatabaseError(PagekeeperError):
+    """The database file cannot be created or opened; exit code 2."""

@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
+from .errors import DatabaseError
 from .models import TARGET_KINDS
 
 #: The `kind` list is baked into a CHECK constraint, so it has to be written
@@ -152,9 +153,15 @@ class Database:
     def init(self) -> None:
         parent = Path(self.path).parent
         if str(parent):
-            parent.mkdir(parents=True, exist_ok=True)
+            try:
+                parent.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                raise DatabaseError(f"{self.path!r}: {exc}") from None
         with self._lock:
-            conn = self._open()
+            try:
+                conn = self._open()
+            except sqlite3.Error as exc:
+                raise DatabaseError(f"{self.path!r}: {exc}") from None
             try:
                 conn.executescript(SCHEMA)
                 conn.commit()
